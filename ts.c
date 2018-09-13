@@ -31,6 +31,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <time.h>
 #ifdef _WIN32
 #include <io.h>
 #else // _WIN32
@@ -1976,6 +1977,100 @@ extern void report_adaptation_field(byte        adapt[],
   {
     fprint_msg(" .. PCR %12" LLU_FORMAT_STUMP "\n", pcr);
   }
+
+  /*
+    Parse the private data and output EBP information
+  */
+  if (ON(adapt[0],0x02))
+  {
+
+    int offset = 1;
+    if (ON(adapt[0],0x10)) offset += 6; /* PCR */
+    if (ON(adapt[0],0x08)) offset += 6; /* OPCR */
+    if (ON(adapt[0],0x04)) offset += 1; /* splice */
+
+    byte private_data_length = adapt[offset++];
+    byte *private_data_base = &adapt[offset];
+    offset = 0;
+
+    while (offset < private_data_length)
+    {
+      const unsigned char tag = private_data_base[offset++];
+      const unsigned char length = private_data_base[offset++];
+
+      const int registered_private_data = 0xdf;
+      if (tag == registered_private_data)
+      {
+        if (!strncmp((char*)&private_data_base[offset], "EBP0", 4))
+        {
+          const int EBP_fragment_flag = 0x80;
+          const int EBP_segment_flag = 0x40;
+          const int EBP_SAP_flag = 0x20;
+          const int EBP_grouping_flag = 0x10;
+          const int EBP_time_flag = 0x08;
+          const int EBP_concealment_flag = 0x04;
+          const int EBP_extension_flag = 0x01;
+
+          const int EBP_grouping_ext_flag = 0x01;
+
+          unsigned char flags = private_data_base[offset + 4];
+          fprint_msg(" EBP [flags %02x]", flags);
+          if (flags)
+          {
+            print_msg(":");
+            if (ON(flags,EBP_fragment_flag)) print_msg(" fragment ");
+            if (ON(flags,EBP_segment_flag)) print_msg(" segment ");
+            if (ON(flags,EBP_SAP_flag)) print_msg(" SAP ");
+            if (ON(flags,EBP_grouping_flag)) print_msg(" grouping ");
+            if (ON(flags,EBP_time_flag)) print_msg(" time ");
+            if (ON(flags,EBP_concealment_flag)) print_msg(" concealment ");
+            if (ON(flags,EBP_extension_flag)) print_msg(" extension ");
+          }
+          print_msg("\n");
+
+          if (flags & EBP_time_flag)
+          {
+            int time_buffer_offset = offset + 4 + 1;
+            if (flags & EBP_extension_flag) time_buffer_offset++;
+            if (flags & EBP_SAP_flag) time_buffer_offset++;
+            if (flags & EBP_grouping_flag)
+            {
+              unsigned char ext_flag;
+              do
+              {
+                ext_flag = private_data_base[time_buffer_offset] & EBP_grouping_ext_flag;
+                time_buffer_offset++;
+              } while (ext_flag);
+            }
+
+            unsigned char *time_buffer = &private_data_base[time_buffer_offset];
+            unsigned long ebp_acquisition_time = 0;
+            int i;
+            for (i = 0; i < 8; i++)
+            {
+              ebp_acquisition_time <<= 8;
+              ebp_acquisition_time += *time_buffer++;
+            }
+            unsigned int ntp_seconds = ebp_acquisition_time >> 32;
+            unsigned int ntp_fraction = ebp_acquisition_time & 0xFFFFFFFFUL;
+
+            const time_t time = ntp_seconds - 2208988800UL;
+            struct tm *tm_info = localtime(&time);
+            char buf[80];
+            strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S %Z", tm_info);
+
+            const int millisecs = ((unsigned long)ntp_fraction * 1000UL) >> 32;
+
+            fprint_msg(" .. EBP_acquisition_time = 0x%016lx (%s +%dms)\n",
+                       ebp_acquisition_time, buf, millisecs);
+          }
+        }
+      }
+      offset += length;
+
+    }
+  }
+
   return;
 }
 
