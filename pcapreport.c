@@ -649,9 +649,11 @@ static int digest_times(pcapreport_ctx_t * const ctx,
           int has_pcr;
           uint64_t pcr;
           int64_t pcr_time_offset;
+          int is_ebp;
 
           get_PCR_from_adaptation_field(adapt, adapt_len, &has_pcr,
                                         &pcr);
+          is_ebp = is_ebp_in_adaptation_field(adapt, adapt_len);
 
           if (has_pcr)
           {
@@ -761,8 +763,17 @@ static int digest_times(pcapreport_ctx_t * const ctx,
                 int64_t rel_tim = t_pcr - tsect->time_first; // 90kHz
                 double skew_rate = (rel_tim == 0) ? 0.0 :
                   (double)skew / ((double)((double)rel_tim / (60*90000)));
+                const char *ebp_indicator;
+                if (is_ebp)
+                {
+                  ebp_indicator = ", ebp";
+                }
+                else
+                {
+                  ebp_indicator = "";
+                }
 
-                fprint_msg(">%d> [ts %d net %d ] PCR %lld Time %d.%d [rel %d.%d]  - skew = %lld (delta = %lld, rate = %.4g PTS/min) - jitter=%u\n",
+                fprint_msg(">%d> [ts %d net %d ] PCR %lld Time %d.%d [rel %d.%d]  - skew = %lld (delta = %lld, rate = %.4g PTS/min) - jitter=%u%s\n",
                            st->stream_no,
                            st->ts_counter, ctx->pkt_counter,
                            pcr,
@@ -770,7 +781,7 @@ static int digest_times(pcapreport_ctx_t * const ctx,
                            (int)(rel_tim / (int64_t)1000000),
                            (int)rel_tim%1000000,
                            skew, pcr_time_offset - st->last_time_offset,
-                           skew_rate, cur_jitter);
+                           skew_rate, cur_jitter, ebp_indicator);
               }
 
               if (st->csv_name != NULL)  // We should be outputting to file

@@ -1939,6 +1939,47 @@ extern void get_PCR_from_adaptation_field(byte     adapt[],
     *got_pcr = FALSE;
   return;
 }
+
+/*
+ * Return TRUE if the EBP marker is specified  in the adaptation field
+ */
+extern int is_ebp_in_adaptation_field(byte     adapt[],
+                                       int     adapt_len)
+{
+  int is_ebp = FALSE;
+
+  if (ON(adapt[0],0x02)) /* ES-priority */
+  {
+    int offset = 1;
+    if (ON(adapt[0],0x10)) offset += 6; /* PCR */
+    if (ON(adapt[0],0x08)) offset += 6; /* OPCR */
+    if (ON(adapt[0],0x04)) offset += 1; /* splice */
+
+    byte private_data_length = adapt[offset++];
+    byte *private_data_base = &adapt[offset];
+    offset = 0;
+
+    while (offset < private_data_length)
+    {
+      const unsigned char tag = private_data_base[offset++];
+      const unsigned char length = private_data_base[offset++];
+
+      const int registered_private_data = 0xdf;
+      if (tag == registered_private_data)
+      {
+        if (!strncmp((char*)&private_data_base[offset], "EBP0", 4))
+        {
+          is_ebp = TRUE;
+          break;
+        }
+      }
+      offset += length;
+
+    }
+  }
+
+  return is_ebp;
+}
 
 /*
  * Report on the contents of this TS packet's adaptation field
