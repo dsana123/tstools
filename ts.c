@@ -1941,7 +1941,7 @@ extern void get_PCR_from_adaptation_field(byte     adapt[],
 }
 
 /*
- * Return TRUE if the EBP marker is specified  in the adaptation field
+ * Return TRUE if the EBP marker is specified in the adaptation field
  */
 extern int is_ebp_in_adaptation_field(byte     adapt[],
                                        int     adapt_len)
@@ -2052,8 +2052,6 @@ extern void report_adaptation_field(byte        adapt[],
           const int EBP_concealment_flag = 0x04;
           const int EBP_extension_flag = 0x01;
 
-          const int EBP_grouping_ext_flag = 0x01;
-
           unsigned char flags = private_data_base[offset + 4];
           fprint_msg(" EBP [flags %02x]", flags);
           if (flags)
@@ -2069,22 +2067,77 @@ extern void report_adaptation_field(byte        adapt[],
           }
           print_msg("\n");
 
-          if (flags & EBP_time_flag)
+          int offset2 = offset + 4 + 1;
+          if (flags  & EBP_extension_flag)
           {
-            int time_buffer_offset = offset + 4 + 1;
-            if (flags & EBP_extension_flag) time_buffer_offset++;
-            if (flags & EBP_SAP_flag) time_buffer_offset++;
-            if (flags & EBP_grouping_flag)
+            offset2++;
+          }
+
+          if (flags & EBP_SAP_flag)
+          {
+            offset2++;
+          }
+
+          if (flags & EBP_grouping_flag)
+          {
+            int grouping_ext_flag;
+            int grouping_id;
+            int ad_insertion = 0;
+            int start_indicator = 0;
+            int end_indicator = 0;
+
+            grouping_ext_flag = private_data_base[offset2] >> 7;
+            grouping_id = private_data_base[offset2] & 0x7f;
+            offset2++;
+            if (grouping_id == 35)
             {
-              unsigned char ext_flag;
-              do
-              {
-                ext_flag = private_data_base[time_buffer_offset] & EBP_grouping_ext_flag;
-                time_buffer_offset++;
-              } while (ext_flag);
+              ad_insertion = 1;
             }
 
-            unsigned char *time_buffer = &private_data_base[time_buffer_offset];
+            while (grouping_ext_flag)
+            {
+              grouping_ext_flag = private_data_base[offset2] >> 7;
+              grouping_id = private_data_base[offset2] & 0x7f;
+              offset2++;
+
+              if (grouping_id == 35)
+              {
+                ad_insertion = 1;
+              }
+              else if (ad_insertion)
+              {
+                if (grouping_id == 126)
+                {
+                  start_indicator = 1;
+                }
+                else if (grouping_id == 127)
+                {
+                  end_indicator = 1;
+                }
+              }
+            }
+
+            if (start_indicator && end_indicator)
+            {
+              fprint_msg(" .. EBP grouping Ad Insertion Start Indicator End Indicator\n");
+            }
+            else if (start_indicator)
+            {
+              fprint_msg(" .. EBP grouping Ad Insertion Start Indicator\n");
+            }
+            else if (end_indicator)
+            {
+              fprint_msg(" .. EBP grouping Ad Insertion End Indicator\n");
+            }
+            else if (ad_insertion)
+            {
+              fprint_msg(" .. EBP grouping Ad Insertion\n");
+            }
+          }
+
+          if (flags & EBP_time_flag)
+          {
+            unsigned char *time_buffer = &private_data_base[offset2];
             unsigned long ebp_acquisition_time = 0;
             int i;
             for (i = 0; i < 8; i++)
