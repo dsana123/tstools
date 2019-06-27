@@ -649,16 +649,36 @@ static int digest_times(pcapreport_ctx_t * const ctx,
           int has_pcr;
           uint64_t pcr;
           int64_t pcr_time_offset;
-          int is_ebp;
+          int output_info = 0;
+          int is_ebp = 0;
+          int is_ad_insertion = 0;
 
           get_PCR_from_adaptation_field(adapt, adapt_len, &has_pcr,
                                         &pcr);
-          is_ebp = is_ebp_in_adaptation_field(adapt, adapt_len);
 
-          if (is_ebp && ctx->time_report)
+          if (ON(adapt[0],0x02)) /* ES-priority */
           {
-              fprint_msg(">%d> Found EBP at %d.%d s \n", st->stream_no,
-                         pcap_pkt_hdr->ts_sec, pcap_pkt_hdr->ts_usec);
+            int offset = 1;
+            if (ON(adapt[0],0x10)) offset += 6; /* PCR */
+            if (ON(adapt[0],0x08)) offset += 6; /* OPCR */
+            if (ON(adapt[0],0x04)) offset += 1; /* splice */
+
+            byte private_data_length = adapt[offset++];
+            byte *private_data_base = &adapt[offset];
+            parse_ebp_info(
+              private_data_base, private_data_length, output_info, &is_ebp,
+              &is_ad_insertion);
+
+            if (is_ebp && ctx->time_report)
+            {
+              const char *ad_insertion = "";
+              if (is_ad_insertion)
+              {
+                ad_insertion = "(Ad Insertion) ";
+              }
+              fprint_msg(">%d> Found EBP %sat %d.%d s \n", st->stream_no,
+                         ad_insertion, pcap_pkt_hdr->ts_sec, pcap_pkt_hdr->ts_usec);
+            }
           }
 
           if (has_pcr)

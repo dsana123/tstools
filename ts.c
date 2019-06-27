@@ -1940,46 +1940,155 @@ extern void get_PCR_from_adaptation_field(byte     adapt[],
   return;
 }
 
-/*
- * Return TRUE if the EBP marker is specified in the adaptation field
- */
-extern int is_ebp_in_adaptation_field(byte     adapt[],
-                                       int     adapt_len)
+void parse_ebp_info(
+  byte *private_data_base, int private_data_length, int output_info,
+  int *is_ebp, int *is_ad_insertion)
 {
-  int is_ebp = FALSE;
+  int offset = 0;
 
-  if (ON(adapt[0],0x02)) /* ES-priority */
+  if (is_ad_insertion) *is_ad_insertion = 0;
+  if (is_ebp) *is_ebp = 0;
+
+  while (offset < private_data_length)
   {
-    int offset = 1;
-    if (ON(adapt[0],0x10)) offset += 6; /* PCR */
-    if (ON(adapt[0],0x08)) offset += 6; /* OPCR */
-    if (ON(adapt[0],0x04)) offset += 1; /* splice */
+    const unsigned char tag = private_data_base[offset++];
+    const unsigned char length = private_data_base[offset++];
 
-    byte private_data_length = adapt[offset++];
-    byte *private_data_base = &adapt[offset];
-    offset = 0;
-
-    while (offset < private_data_length)
+    const int registered_private_data = 0xdf;
+    if (tag == registered_private_data)
     {
-      const unsigned char tag = private_data_base[offset++];
-      const unsigned char length = private_data_base[offset++];
-
-      const int registered_private_data = 0xdf;
-      if (tag == registered_private_data)
+      if (!strncmp((char*)&private_data_base[offset], "EBP0", 4))
       {
-        if (!strncmp((char*)&private_data_base[offset], "EBP0", 4))
+        const int EBP_fragment_flag = 0x80;
+        const int EBP_segment_flag = 0x40;
+        const int EBP_SAP_flag = 0x20;
+        const int EBP_grouping_flag = 0x10;
+        const int EBP_time_flag = 0x08;
+        const int EBP_concealment_flag = 0x04;
+        const int EBP_extension_flag = 0x01;
+
+        if (is_ebp) *is_ebp = 1;
+
+        unsigned char flags = private_data_base[offset + 4];
+        if (output_info) fprint_msg(" EBP [flags %02x]", flags);
+        if (flags && output_info)
         {
-          is_ebp = TRUE;
-          break;
+          print_msg(":");
+          if (ON(flags,EBP_fragment_flag)) print_msg(" fragment ");
+          if (ON(flags,EBP_segment_flag)) print_msg(" segment ");
+          if (ON(flags,EBP_SAP_flag)) print_msg(" SAP ");
+          if (ON(flags,EBP_grouping_flag)) print_msg(" grouping ");
+          if (ON(flags,EBP_time_flag)) print_msg(" time ");
+          if (ON(flags,EBP_concealment_flag)) print_msg(" concealment ");
+          if (ON(flags,EBP_extension_flag)) print_msg(" extension ");
+        }
+        if (output_info) print_msg("\n");
+
+        int offset2 = offset + 4 + 1;
+        if (flags  & EBP_extension_flag)
+        {
+          offset2++;
+        }
+
+        if (flags & EBP_SAP_flag)
+        {
+          offset2++;
+        }
+
+        if (flags & EBP_grouping_flag)
+        {
+          int grouping_ext_flag;
+          int grouping_id;
+          int ad_insertion_group = 0;
+          int start_indicator = 0;
+          int end_indicator = 0;
+
+          grouping_ext_flag = private_data_base[offset2] >> 7;
+          grouping_id = private_data_base[offset2] & 0x7f;
+          offset2++;
+          if (grouping_id == 35)
+          {
+            ad_insertion_group = 1;
+          }
+
+          while (grouping_ext_flag)
+          {
+            grouping_ext_flag = private_data_base[offset2] >> 7;
+            grouping_id = private_data_base[offset2] & 0x7f;
+            offset2++;
+
+            if (grouping_id == 35)
+            {
+              ad_insertion_group = 1;
+            }
+            else if (ad_insertion_group)
+            {
+              if (grouping_id == 126)
+              {
+                start_indicator = 1;
+                if (is_ad_insertion) *is_ad_insertion = 1;
+              }
+              else if (grouping_id == 127)
+              {
+                end_indicator = 1;
+                if (is_ad_insertion) *is_ad_insertion = 1;
+              }
+            }
+          }
+
+          if (output_info)
+          {
+            if (start_indicator && end_indicator)
+            {
+              fprint_msg(" .. EBP grouping Ad Insertion Start Indicator End Indicator\n");
+            }
+            else if (start_indicator)
+            {
+              fprint_msg(" .. EBP grouping Ad Insertion Start Indicator\n");
+            }
+            else if (end_indicator)
+            {
+              fprint_msg(" .. EBP grouping Ad Insertion End Indicator\n");
+            }
+            else if (ad_insertion_group)
+            {
+              fprint_msg(" .. EBP grouping Ad Insertion\n");
+            }
+          }
+        }
+
+        if (flags & EBP_time_flag)
+        {
+          unsigned char *time_buffer = &private_data_base[offset2];
+          unsigned long ebp_acquisition_time = 0;
+          int i;
+          for (i = 0; i < 8; i++)
+          {
+            ebp_acquisition_time <<= 8;
+            ebp_acquisition_time += *time_buffer++;
+          }
+          unsigned int ntp_seconds = ebp_acquisition_time >> 32;
+          unsigned int ntp_fraction = ebp_acquisition_time & 0xFFFFFFFFUL;
+
+          const time_t time = ntp_seconds - 2208988800UL;
+          struct tm *tm_info = localtime(&time);
+          char buf[80];
+          strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S %Z", tm_info);
+
+          const int millisecs = ((unsigned long)ntp_fraction * 1000UL) >> 32;
+
+          if (output_info)
+            fprint_msg(" .. EBP_acquisition_time = 0x%016lx (%s +%dms)\n",
+                       ebp_acquisition_time, buf, millisecs);
         }
       }
-      offset += length;
-
     }
-  }
+    offset += length;
 
-  return is_ebp;
+  }
 }
+
+
 
 /*
  * Report on the contents of this TS packet's adaptation field
@@ -2032,137 +2141,8 @@ extern void report_adaptation_field(byte        adapt[],
 
     byte private_data_length = adapt[offset++];
     byte *private_data_base = &adapt[offset];
-    offset = 0;
-
-    while (offset < private_data_length)
-    {
-      const unsigned char tag = private_data_base[offset++];
-      const unsigned char length = private_data_base[offset++];
-
-      const int registered_private_data = 0xdf;
-      if (tag == registered_private_data)
-      {
-        if (!strncmp((char*)&private_data_base[offset], "EBP0", 4))
-        {
-          const int EBP_fragment_flag = 0x80;
-          const int EBP_segment_flag = 0x40;
-          const int EBP_SAP_flag = 0x20;
-          const int EBP_grouping_flag = 0x10;
-          const int EBP_time_flag = 0x08;
-          const int EBP_concealment_flag = 0x04;
-          const int EBP_extension_flag = 0x01;
-
-          unsigned char flags = private_data_base[offset + 4];
-          fprint_msg(" EBP [flags %02x]", flags);
-          if (flags)
-          {
-            print_msg(":");
-            if (ON(flags,EBP_fragment_flag)) print_msg(" fragment ");
-            if (ON(flags,EBP_segment_flag)) print_msg(" segment ");
-            if (ON(flags,EBP_SAP_flag)) print_msg(" SAP ");
-            if (ON(flags,EBP_grouping_flag)) print_msg(" grouping ");
-            if (ON(flags,EBP_time_flag)) print_msg(" time ");
-            if (ON(flags,EBP_concealment_flag)) print_msg(" concealment ");
-            if (ON(flags,EBP_extension_flag)) print_msg(" extension ");
-          }
-          print_msg("\n");
-
-          int offset2 = offset + 4 + 1;
-          if (flags  & EBP_extension_flag)
-          {
-            offset2++;
-          }
-
-          if (flags & EBP_SAP_flag)
-          {
-            offset2++;
-          }
-
-          if (flags & EBP_grouping_flag)
-          {
-            int grouping_ext_flag;
-            int grouping_id;
-            int ad_insertion = 0;
-            int start_indicator = 0;
-            int end_indicator = 0;
-
-            grouping_ext_flag = private_data_base[offset2] >> 7;
-            grouping_id = private_data_base[offset2] & 0x7f;
-            offset2++;
-            if (grouping_id == 35)
-            {
-              ad_insertion = 1;
-            }
-
-            while (grouping_ext_flag)
-            {
-              grouping_ext_flag = private_data_base[offset2] >> 7;
-              grouping_id = private_data_base[offset2] & 0x7f;
-              offset2++;
-
-              if (grouping_id == 35)
-              {
-                ad_insertion = 1;
-              }
-              else if (ad_insertion)
-              {
-                if (grouping_id == 126)
-                {
-                  start_indicator = 1;
-                }
-                else if (grouping_id == 127)
-                {
-                  end_indicator = 1;
-                }
-              }
-            }
-
-            if (start_indicator && end_indicator)
-            {
-              fprint_msg(" .. EBP grouping Ad Insertion Start Indicator End Indicator\n");
-            }
-            else if (start_indicator)
-            {
-              fprint_msg(" .. EBP grouping Ad Insertion Start Indicator\n");
-            }
-            else if (end_indicator)
-            {
-              fprint_msg(" .. EBP grouping Ad Insertion End Indicator\n");
-            }
-            else if (ad_insertion)
-            {
-              fprint_msg(" .. EBP grouping Ad Insertion\n");
-            }
-          }
-
-          if (flags & EBP_time_flag)
-          {
-            unsigned char *time_buffer = &private_data_base[offset2];
-            unsigned long ebp_acquisition_time = 0;
-            int i;
-            for (i = 0; i < 8; i++)
-            {
-              ebp_acquisition_time <<= 8;
-              ebp_acquisition_time += *time_buffer++;
-            }
-            unsigned int ntp_seconds = ebp_acquisition_time >> 32;
-            unsigned int ntp_fraction = ebp_acquisition_time & 0xFFFFFFFFUL;
-
-            const time_t time = ntp_seconds - 2208988800UL;
-            struct tm *tm_info = localtime(&time);
-            char buf[80];
-            strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S %Z", tm_info);
-
-            const int millisecs = ((unsigned long)ntp_fraction * 1000UL) >> 32;
-
-            fprint_msg(" .. EBP_acquisition_time = 0x%016lx (%s +%dms)\n",
-                       ebp_acquisition_time, buf, millisecs);
-          }
-        }
-      }
-      offset += length;
-
-    }
+    int output_info = 1;
+    parse_ebp_info(private_data_base, private_data_length, output_info, NULL, NULL);
   }
 
   return;

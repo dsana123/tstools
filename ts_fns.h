@@ -503,10 +503,12 @@ extern void get_PCR_from_adaptation_field(byte      adapt[],
                                           int      *got_pcr,
                                           uint64_t *pcr);
 /*
- * Return TRUE if the EBP marker is specified  in the adaptation field
+ * Parse the EBP info and optionally output EBP information
  */
-extern int is_ebp_in_adaptation_field(byte     adapt[],
-                                      int     adapt_len);
+void parse_ebp_info(
+  byte *private_data_base, int private_data_length, int output_info,
+  int *is_ebp, int *is_ad_insertion);
+
 /*
  * Report on the contents of this TS packet's adaptation field
  *
